@@ -1,0 +1,35 @@
+# Personal alias scripts — not part of ALI core (ali.sh + ali/ only)
+/aliasBackup.sh
+/battery.sh
+/cleanup.sh
+/copy.sh
+/doorbell.sh
+/gitac.sh
+/gitpast.sh
+/listen.sh
+/live-west.sh
+/loseit.sh
+/newAlias.sh
+/open.sh
+/paste_script.sh
+/projectStructure.sh
+/scry.sh
+/update.sh
+/weather.sh
+
+# Catch any other root-level scripts you add later
+/*.sh
+!ali.sh
+
+# Personal backups and local data
+backups/
+*.bak
+
+# Secrets
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+*.swp
+*~
