@@ -61,8 +61,14 @@ TUI_C_PANEL=''
 TUI_C_FRAME_MUTED=''
 TUI_OUT=''
 
-TUI_HOME_LIST_NORM=()
-TUI_HOME_LIST_SEL=()
+TUI_SUBMENU_LABELS=()
+TUI_SUBMENU_FIRST_ROW=9
+TUI_SUBMENU_FOOTER_COUNT=0
+TUI_SUBMENU_NORM=()
+TUI_SUBMENU_SEL=()
+TUI_SUBMENU_CACHE_W=0
+TUI_SUBMENU_CACHE_H=0
+TUI_SUBMENU_LAST_ACTION=''
 
 TUI_ESC=$'\033'
 TUI_RESET="${TUI_ESC}[0m"
@@ -480,22 +486,27 @@ tui_browse_wait_input() {
 }
 
 tui_home_apply_nav() {
-  case "$1" in
-    up)
-      TUI_MENU_SEL=$((TUI_MENU_SEL - 1))
-      (( TUI_MENU_SEL < 0 )) && TUI_MENU_SEL=$((${#tui_menu_items[@]} - 1))
-      ;;
-    down)
-      TUI_MENU_SEL=$((TUI_MENU_SEL + 1))
-      (( TUI_MENU_SEL >= ${#tui_menu_items[@]} )) && TUI_MENU_SEL=0
-      ;;
-  esac
+  tui_submenu_apply_nav "$1" TUI_MENU_SEL ${#tui_menu_items[@]}
 }
 
-tui_home_format_menu_row() {
+tui_submenu_set_items() {
+  TUI_SUBMENU_FIRST_ROW=$1
+  shift
+  TUI_SUBMENU_LABELS=("$@")
+  tui_submenu_invalidate_cache
+}
+
+tui_submenu_invalidate_cache() {
+  TUI_SUBMENU_NORM=()
+  TUI_SUBMENU_SEL=()
+  TUI_SUBMENU_CACHE_W=0
+  TUI_SUBMENU_CACHE_H=0
+}
+
+tui_submenu_format_row() {
   local idx=$1 selected=$2
-  local row=$((9 + idx))
-  local label="${tui_menu_items[$idx]}"
+  local row=$((TUI_SUBMENU_FIRST_ROW + idx))
+  local label="${TUI_SUBMENU_LABELS[$idx]}"
   local line w=$((TUI_INNER_W - 4))
 
   if (( selected )); then
@@ -510,51 +521,84 @@ tui_home_format_menu_row() {
   printf '%s[%d;6H%s' "$TUI_ESC" "$row" "$(tui_pad_line "${TUI_C_APPBG}${line}${TUI_C_APPBG}" "$w")"
 }
 
-tui_home_menu_cache_build() {
+tui_submenu_cache_build() {
   local i
 
-  TUI_HOME_LIST_NORM=()
-  TUI_HOME_LIST_SEL=()
-  for i in "${!tui_menu_items[@]}"; do
-    TUI_HOME_LIST_NORM+=("$(tui_home_format_menu_row "$i" 0)")
-    TUI_HOME_LIST_SEL+=("$(tui_home_format_menu_row "$i" 1)")
+  if [[ "$TUI_W" == "$TUI_SUBMENU_CACHE_W" && "$TUI_H" == "$TUI_SUBMENU_CACHE_H" \
+    && ${#TUI_SUBMENU_NORM[@]} == ${#TUI_SUBMENU_LABELS[@]} ]]; then
+    return 0
+  fi
+
+  TUI_SUBMENU_NORM=()
+  TUI_SUBMENU_SEL=()
+  for i in "${!TUI_SUBMENU_LABELS[@]}"; do
+    TUI_SUBMENU_NORM+=("$(tui_submenu_format_row "$i" 0)")
+    TUI_SUBMENU_SEL+=("$(tui_submenu_format_row "$i" 1)")
   done
+  TUI_SUBMENU_CACHE_W=$TUI_W
+  TUI_SUBMENU_CACHE_H=$TUI_H
 }
 
-tui_home_paint_nav() {
-  local prev=$1
+tui_submenu_apply_nav() {
+  local dir=$1
+  local sel_name=$2
+  local count=$3
+  local -n _sel=$sel_name
 
-  (( prev == TUI_MENU_SEL )) && return 0
-  (( ${#TUI_HOME_LIST_NORM[@]} == 0 )) && tui_home_menu_cache_build
+  case "$dir" in
+    up)
+      _sel=$((_sel - 1))
+      (( _sel < 0 )) && _sel=$((count - 1))
+      ;;
+    down)
+      _sel=$((_sel + 1))
+      (( _sel >= count )) && _sel=0
+      ;;
+  esac
+}
+
+tui_submenu_paint_nav() {
+  local prev=$1 current=$2
+
+  (( prev == current )) && return 0
+  tui_submenu_cache_build
 
   tui_out_reset
-  if (( prev >= 0 && prev < ${#TUI_HOME_LIST_NORM[@]} )); then
-    tui_out_append "${TUI_HOME_LIST_NORM[$prev]}"
+  if (( prev >= 0 && prev < ${#TUI_SUBMENU_NORM[@]} )); then
+    tui_out_append "${TUI_SUBMENU_NORM[$prev]}"
   fi
-  if (( TUI_MENU_SEL >= 0 && TUI_MENU_SEL < ${#TUI_HOME_LIST_SEL[@]} )); then
-    tui_out_append "${TUI_HOME_LIST_SEL[$TUI_MENU_SEL]}"
+  if (( current >= 0 && current < ${#TUI_SUBMENU_SEL[@]} )); then
+    tui_out_append "${TUI_SUBMENU_SEL[$current]}"
   fi
   tui_begin_sync
   tui_out_flush
   tui_end_sync
 }
 
-tui_home_wait_input() {
+tui_submenu_wait_input() {
+  local apply_fn=$1
   local key dir
 
   key=$(tui_read_key_once)
   dir=$(tui_nav_key "$key")
   case "$dir" in
     up|down)
-      tui_home_apply_nav "$dir"
-      tui_drain_arrow_burst tui_home_apply_nav
+      "$apply_fn" "$dir"
+      tui_drain_arrow_burst "$apply_fn"
       TUI_LAST_KEY=$dir
       return 0
       ;;
   esac
   TUI_LAST_KEY=$key
-  tui_input_purge
   return 1
+}
+
+tui_home_paint_nav() {
+  tui_submenu_paint_nav "$1" "$TUI_MENU_SEL"
+}
+
+tui_home_wait_input() {
+  tui_submenu_wait_input tui_home_apply_nav
 }
 
 tui_stats_invalidate() { TUI_STATS_DIRTY=1; }
@@ -853,6 +897,56 @@ tui_nav_key() {
   printf '%s' "$1"
 }
 
+tui_nav_key_is_back() {
+  case "$1" in
+    b|B|h|H|back|esc) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+tui_nav_key_is_quit() {
+  case "$1" in
+    q|Q|quit) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Shared option-menu key handling: sets TUI_SUBMENU_LAST_ACTION to
+# jump, enter, back, quit, or none.
+tui_submenu_handle_key() {
+  local key=$1
+  local sel_name=$2
+  local count=$3
+  local prev=$4
+  local -n _sel=$sel_name
+
+  TUI_SUBMENU_LAST_ACTION=none
+
+  if tui_nav_key_is_back "$key"; then
+    TUI_SUBMENU_LAST_ACTION=back
+    return 0
+  fi
+  if tui_nav_key_is_quit "$key"; then
+    TUI_SUBMENU_LAST_ACTION=quit
+    return 0
+  fi
+  case "$key" in
+    enter)
+      TUI_SUBMENU_LAST_ACTION=enter
+      return 0
+      ;;
+    [1-9])
+      if (( key >= 1 && key <= count )); then
+        _sel=$((key - 1))
+        if (( _sel != prev )); then
+          TUI_SUBMENU_LAST_ACTION=jump
+        fi
+        return 0
+      fi
+      ;;
+  esac
+}
+
 tui_browse_idx_ok() {
   local idx=$1 total=$2
   (( total > 0 && idx >= 0 && idx < total && idx < ${#TUI_BC_NAMES[@]} ))
@@ -1059,20 +1153,21 @@ tui_draw_nav_footer() {
   tui_reset
 
   case "$TUI_NAV_MODE" in
-    home)
-      tui_draw_footer_keys '↑↓' ' move' 'Enter' '' '1-6' ' jump' 'q' 'uit'
+    home|submenu)
+      local _n=${TUI_SUBMENU_FOOTER_COUNT:-6}
+      tui_draw_footer_keys '↑↓' ' move' 'Enter' '' "1-${_n}" ' jump' 'b' ' back' 'q' 'uit'
       ;;
     browse)
-      tui_draw_footer_keys '↑↓' ' scroll' 'Enter' '' 'b' 'ack' 'q' 'uit'
+      tui_draw_footer_keys '↑↓' ' scroll' 'Enter' '' 'b' ' back' 'q' 'uit'
       ;;
     browse_actions)
       tui_draw_browse_actions_footer "${TUI_BROWSE_ACTIONS_ENABLED:-1}"
       ;;
     action)
-      tui_draw_footer_keys 'Enter' '' 'b' 'ack' 'q' 'uit'
+      tui_draw_footer_keys 'Enter' '' 'b' ' back' 'q' 'uit'
       ;;
     pager)
-      tui_draw_footer_keys '↑↓' ' scroll' 'Enter' '' 'b' 'ack' 'q' 'uit'
+      tui_draw_footer_keys '↑↓' ' scroll' 'Enter' '' 'b' ' back' 'q' 'uit'
       ;;
     *)
       tui_draw_footer_keys 'q' 'uit'
@@ -1083,9 +1178,9 @@ tui_draw_nav_footer() {
 tui_draw_browse_actions_footer() {
   local enabled=$1
   if (( enabled )); then
-    tui_draw_footer_keys 'd' 'isable' 'n' ' rename' 'r' 'emove' 'b' 'ack' 'q' 'uit'
+    tui_draw_footer_keys 'd' 'isable' 'n' ' rename' 'r' 'emove' 'b' ' back' 'q' 'uit'
   else
-    tui_draw_footer_keys 'e' 'nable' 'n' ' rename' 'r' 'emove' 'b' 'ack' 'q' 'uit'
+    tui_draw_footer_keys 'e' 'nable' 'n' ' rename' 'r' 'emove' 'b' ' back' 'q' 'uit'
   fi
 }
 
@@ -1126,6 +1221,7 @@ tui_draw_home() {
 
   tui_stats_collect
   tui_nav_mode_set home
+  TUI_SUBMENU_FOOTER_COUNT=${#tui_menu_items[@]}
   tui_draw_frame ' ALI - alias registry cli '
   tui_draw_status_pills 3 4
   tui_draw_panel_divider 6
@@ -1135,10 +1231,11 @@ tui_draw_home() {
   printf '%bCOMMAND MENU' "$(tui_style_muted)$TUI_BOLD"
   tui_reset
 
+  tui_submenu_set_items 9 "${tui_menu_items[@]}"
   for i in "${!tui_menu_items[@]}"; do
     tui_draw_home_menu_row "$i" "$(( i == TUI_MENU_SEL ))"
   done
-  tui_home_menu_cache_build
+  tui_submenu_cache_build
 
   tui_draw_panel_divider $((TUI_H - 3))
   tui_draw_nav_footer
@@ -1695,16 +1792,40 @@ tui_resume_from_external() {
 tui_pager() {
   local title=$1
   local -n _pg_lines=$2
-  local off=0 vis=$((TUI_H - 4)) total=${#_pg_lines[@]} key dir
+  local off=0 vis=$((TUI_H - 4)) total=${#_pg_lines[@]} key dir nav=0
+  local max=$((TUI_INNER_W - 6))
 
   TUI_PAGER_ACTIVE=1
   tui_nav_mode_set pager
   (( vis < 1 )) && vis=1
+
+  tui_pager_apply_nav() {
+    case "$1" in
+      down)
+        if (( off + vis < total )); then
+          off=$((off + 1))
+        fi
+        ;;
+      up)
+        (( off > 0 )) && off=$((off - 1))
+        ;;
+      pageup)
+        off=$((off - vis))
+        (( off < 0 )) && off=0
+        ;;
+      pagedown)
+        off=$((off + vis))
+        (( off + vis > total )) && off=$((total - vis))
+        (( off < 0 )) && off=0
+        ;;
+    esac
+  }
+
   while true; do
     tui_begin_sync
     tui_draw_frame "$title"
     tui_draw_panel_divider 3
-    local i max=$((TUI_INNER_W - 6))
+    local i
     for ((i = 0; i < vis && i + off < total; i++)); do
       tui_at "$((4 + i))" 4
       printf '%b%s' "$(tui_style_text)" "$(tui_truncate "${_pg_lines[$((off + i))]}" "$max")"
@@ -1718,22 +1839,21 @@ tui_pager() {
     tui_draw_nav_footer
     tui_end_sync
 
+    nav=0
     key=$(tui_read_key_once)
     dir=$(tui_nav_key "$key")
     case "$dir" in
-      down)
-        if (( off + vis < total )); then
-          off=$((off + 1))
-        fi
-        ;;
-      up)
-        (( off > 0 )) && off=$((off - 1))
+      up|down|pageup|pagedown)
+        tui_pager_apply_nav "$dir"
+        tui_drain_arrow_burst tui_pager_apply_nav
+        nav=1
         ;;
       enter|esc|back|quit) break ;;
     esac
     case "$key" in
       b|B) break ;;
     esac
+    (( nav )) || continue
   done
   TUI_PAGER_ACTIVE=0
   tui_nav_mode_sync

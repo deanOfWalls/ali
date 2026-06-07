@@ -156,6 +156,24 @@ cmd_tui_browse_actions() {
   done
 }
 
+cmd_tui_home_run_item() {
+  case "$TUI_MENU_SEL" in
+    0)
+      cmd_tui_browse_reload browse_names
+      TUI_VIEW=browse
+      TUI_BROWSE_SEL=0
+      TUI_BROWSE_OFF=0
+      TUI_NEED_FULL=1
+      tui_drain_pending_newline
+      ;;
+    1) cmd_tui_run_action new ;;
+    2) cmd_tui_run_action doctor ;;
+    3) cmd_tui_run_action backup ;;
+    4) cmd_tui_run_action help ;;
+    5) cmd_tui_config ;;
+  esac
+}
+
 cmd_tui_browse_reload() {
   local -n _names=$1
   mapfile -t _names < <(registry_list_all_names)
@@ -242,44 +260,20 @@ cmd_tui_menu() {
       if tui_home_wait_input; then
         home_nav=1
       else
-        case "$TUI_LAST_KEY" in
+        tui_submenu_handle_key "$TUI_LAST_KEY" TUI_MENU_SEL ${#tui_menu_items[@]} "$prev_menu"
+        case "$TUI_SUBMENU_LAST_ACTION" in
+          jump)
+            home_nav=1
+            ;;
           enter)
-            case "$TUI_MENU_SEL" in
-              0)
-                cmd_tui_browse_reload browse_names
-                TUI_VIEW=browse
-                TUI_BROWSE_SEL=0
-                TUI_BROWSE_OFF=0
-                TUI_NEED_FULL=1
-                tui_drain_pending_newline
-                ;;
-              1) cmd_tui_run_action new ;;
-              2) cmd_tui_run_action doctor ;;
-              3) cmd_tui_run_action backup ;;
-              4) cmd_tui_run_action help ;;
-              5) cmd_tui_config ;;
-            esac
+            cmd_tui_home_run_item
             ;;
-          1|2|3|4|5|6)
-            TUI_MENU_SEL=$((TUI_LAST_KEY - 1))
-            if (( TUI_MENU_SEL == 0 )); then
-              cmd_tui_browse_reload browse_names
-              TUI_VIEW=browse
-              TUI_BROWSE_SEL=0
-              TUI_BROWSE_OFF=0
-              TUI_NEED_FULL=1
-              tui_drain_pending_newline
-            else
-              case "$TUI_MENU_SEL" in
-                1) cmd_tui_run_action new ;;
-                2) cmd_tui_run_action doctor ;;
-                3) cmd_tui_run_action backup ;;
-                4) cmd_tui_run_action help ;;
-                5) cmd_tui_config ;;
-              esac
-            fi
+          back|esc)
+            :
             ;;
-          quit) TUI_QUIT=1 ;;
+          quit)
+            TUI_QUIT=1
+            ;;
         esac
       fi
 
