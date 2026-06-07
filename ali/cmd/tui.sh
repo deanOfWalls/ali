@@ -203,13 +203,7 @@ cmd_tui_menu() {
       fi
 
       if tui_browse_wait_input "$total"; then
-        tui_begin_sync
-        tui_browse_paint_list "$total" "$prev_sel" "$prev_off"
-        tui_browse_paint_detail "$total" 0
-        tui_end_sync
-        tui_begin_sync
-        tui_browse_paint_detail "$total" 1
-        tui_end_sync
+        tui_browse_paint_nav "$total" "$prev_sel" "$prev_off"
         prev_sel=$TUI_BROWSE_SEL
         prev_off=$TUI_BROWSE_OFF
       else
@@ -295,7 +289,7 @@ cmd_tui_menu() {
           TUI_NEED_FULL=0
           tui_mark_resize_seen
         elif (( home_nav )); then
-          tui_render browse_names '' "$prev_menu" "$prev_sel" "$prev_off"
+          tui_home_paint_nav "$prev_menu"
         fi
         prev_menu=$TUI_MENU_SEL
       fi

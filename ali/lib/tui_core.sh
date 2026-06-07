@@ -61,6 +61,9 @@ TUI_C_PANEL=''
 TUI_C_FRAME_MUTED=''
 TUI_OUT=''
 
+TUI_HOME_LIST_NORM=()
+TUI_HOME_LIST_SEL=()
+
 TUI_ESC=$'\033'
 TUI_RESET="${TUI_ESC}[0m"
 TUI_BOLD="${TUI_ESC}[1m"
@@ -183,8 +186,17 @@ tui_browse_cache_build() {
     fi
     TUI_BC_REG_LINES+=("$(registry_get_line "$name")")
   done
+  tui_browse_invalidate_display_cache
+}
+
+tui_browse_invalidate_display_cache() {
+  TUI_BC_LIST_NORM=()
+  TUI_BC_LIST_SEL=()
+  TUI_BC_DETAIL_META=()
+  TUI_BC_DETAIL_PREVIEW=()
   TUI_BC_DISPLAY_W=0
   TUI_BC_DISPLAY_H=0
+  TUI_BROWSE_DETAIL_SEL=-1
 }
 
 tui_styles_cache_refresh() {
@@ -313,7 +325,7 @@ tui_browse_format_detail_preview_block() {
     line="${TUI_C_MUTED} $(tui_truncate "$pline" "$((dw - 1))")${TUI_C_APPBG}"
     out+="${TUI_ESC}[$((14 + ln));${col}H$(tui_pad_line "$line" "$dw")"
     ln=$((ln + 1))
-  done < <(head -n "$max_preview" "$path" 2>/dev/null)
+  done < <(tui_preview_lines "$path" "$max_preview")
 
   printf '%s' "$out"
 }
@@ -340,6 +352,7 @@ tui_browse_display_cache_build() {
     TUI_BC_LIST_NORM+=("$(tui_browse_format_list_row "$i" 0)")
     TUI_BC_LIST_SEL+=("$(tui_browse_format_list_row "$i" 1)")
     TUI_BC_DETAIL_META+=("$(tui_browse_format_detail_meta_block "$i")")
+    TUI_BC_DETAIL_PREVIEW[$i]=$(tui_browse_format_detail_preview_block "$i")
   done
 
   TUI_BC_DISPLAY_W=$TUI_W
@@ -356,24 +369,12 @@ tui_browse_preview_get() {
   printf '%s' "${TUI_BC_DETAIL_PREVIEW[$idx]}"
 }
 
-tui_browse_detail_get() {
-  local idx=$1 include_preview=${2:-1}
-
-  printf '%s' "${TUI_BC_DETAIL_META[$idx]}"
-  (( include_preview )) && printf '%s' "$(tui_browse_preview_get "$idx")"
-}
-
-tui_browse_paint_list() {
+tui_browse_paint_list_to_out() {
   local total=$1 prev_sel=$2 prev_off=$3
-  local vis prev_slot new_slot i idx changed=0
-
-  (( prev_sel == TUI_BROWSE_SEL && prev_off == TUI_BROWSE_OFF )) && return 0
+  local vis prev_slot new_slot i idx
 
   tui_browse_ensure_visible "$total"
   vis=$(tui_browse_visible_rows)
-  changed=1
-
-  tui_out_reset
 
   if (( prev_off == TUI_BROWSE_OFF )); then
     prev_slot=$((prev_sel - TUI_BROWSE_OFF))
@@ -381,7 +382,7 @@ tui_browse_paint_list() {
     if (( prev_sel >= 0 && prev_sel < total && prev_slot >= 0 && prev_slot < vis )); then
       tui_out_append "${TUI_ESC}[$((5 + prev_slot));3H${TUI_BC_LIST_NORM[$prev_sel]}"
     fi
-    if (( new_slot >= 0 && new_slot < vis )); then
+    if (( TUI_BROWSE_SEL >= 0 && TUI_BROWSE_SEL < total && new_slot >= 0 && new_slot < vis )); then
       tui_out_append "${TUI_ESC}[$((5 + new_slot));3H${TUI_BC_LIST_SEL[$TUI_BROWSE_SEL]}"
     fi
   else
@@ -396,39 +397,67 @@ tui_browse_paint_list() {
     done
   fi
 
-  if (( total > vis && changed )); then
+  if (( total > vis )); then
     tui_out_append "${TUI_ESC}[$((TUI_H - 4));3H${TUI_C_MUTED} $((TUI_BROWSE_SEL + 1)) / ${total}${TUI_C_APPBG}"
   fi
+}
 
+tui_browse_paint_detail_to_out() {
+  local total=$1
+
+  tui_browse_idx_ok "$TUI_BROWSE_SEL" "$total" || return 0
+  if [[ -z "${TUI_BC_DETAIL_PREVIEW[$TUI_BROWSE_SEL]+x}" ]]; then
+    TUI_BC_DETAIL_PREVIEW[$TUI_BROWSE_SEL]=$(tui_browse_format_detail_preview_block "$TUI_BROWSE_SEL")
+  fi
+  tui_out_append "${TUI_BC_DETAIL_META[$TUI_BROWSE_SEL]}"
+  tui_out_append "${TUI_BC_DETAIL_PREVIEW[$TUI_BROWSE_SEL]}"
+  TUI_BROWSE_DETAIL_SEL=$TUI_BROWSE_SEL
+}
+
+tui_browse_paint_nav() {
+  local total=$1 prev_sel=$2 prev_off=$3
+
+  (( prev_sel == TUI_BROWSE_SEL && prev_off == TUI_BROWSE_OFF )) && return 0
+  (( total < 1 )) && return 0
+
+  tui_browse_display_cache_build
+  (( ${#TUI_BC_LIST_NORM[@]} < total )) && return 0
+
+  tui_out_reset
+  tui_browse_paint_list_to_out "$total" "$prev_sel" "$prev_off"
+  tui_browse_paint_detail_to_out "$total"
+  tui_begin_sync
+  tui_out_flush
+  tui_end_sync
+}
+
+tui_browse_detail_get() {
+  local idx=$1 include_preview=${2:-1}
+
+  printf '%s' "${TUI_BC_DETAIL_META[$idx]}"
+  (( include_preview )) && printf '%s' "$(tui_browse_preview_get "$idx")"
+}
+
+tui_browse_paint_list() {
+  local total=$1 prev_sel=$2 prev_off=$3
+
+  tui_browse_display_cache_build
+  tui_out_reset
+  tui_browse_paint_list_to_out "$total" "$prev_sel" "$prev_off"
   tui_out_flush
 }
 
 tui_browse_paint_detail() {
-  local total=$1 preview=${2:-1}
+  local total=$1
 
-  tui_browse_idx_ok "$TUI_BROWSE_SEL" "$total" || return 0
-
+  tui_browse_display_cache_build
   tui_out_reset
-
-  if (( TUI_BROWSE_SEL != TUI_BROWSE_DETAIL_SEL )); then
-    tui_out_append "${TUI_BC_DETAIL_META[$TUI_BROWSE_SEL]}"
-    TUI_BROWSE_DETAIL_SEL=$TUI_BROWSE_SEL
-  fi
-
-  if (( preview )); then
-    tui_out_append "$(tui_browse_preview_get "$TUI_BROWSE_SEL")"
-  fi
-
+  tui_browse_paint_detail_to_out "$total"
   tui_out_flush
 }
 
 tui_browse_paint() {
-  local total=$1 prev_sel=$2 prev_off=$3
-
-  tui_begin_sync
-  tui_browse_paint_list "$total" "$prev_sel" "$prev_off"
-  tui_browse_paint_detail "$total" 1
-  tui_end_sync
+  tui_browse_paint_nav "$1" "$2" "$3"
 }
 
 tui_browse_wait_input() {
@@ -461,6 +490,53 @@ tui_home_apply_nav() {
       (( TUI_MENU_SEL >= ${#tui_menu_items[@]} )) && TUI_MENU_SEL=0
       ;;
   esac
+}
+
+tui_home_format_menu_row() {
+  local idx=$1 selected=$2
+  local row=$((9 + idx))
+  local label="${tui_menu_items[$idx]}"
+  local line w=$((TUI_INNER_W - 4))
+
+  if (( selected )); then
+    line=$(printf '%b  %s %b%b%d%b  %s' \
+      "$TUI_C_SEL" "$TUI_CH_SEL" \
+      "$(tui_rgb_bg "${TUI_SEL_BG[@]}")" "$TUI_C_ACCENT" "$((idx + 1))" \
+      "$TUI_C_SEL" "$label")
+  else
+    line=$(printf '%b    %b%d%b  %s' \
+      "$TUI_C_TEXT" "$TUI_C_ACCENT" "$((idx + 1))" "$TUI_C_TEXT" "$label")
+  fi
+  printf '%s[%d;6H%s' "$TUI_ESC" "$row" "$(tui_pad_line "${TUI_C_APPBG}${line}${TUI_C_APPBG}" "$w")"
+}
+
+tui_home_menu_cache_build() {
+  local i
+
+  TUI_HOME_LIST_NORM=()
+  TUI_HOME_LIST_SEL=()
+  for i in "${!tui_menu_items[@]}"; do
+    TUI_HOME_LIST_NORM+=("$(tui_home_format_menu_row "$i" 0)")
+    TUI_HOME_LIST_SEL+=("$(tui_home_format_menu_row "$i" 1)")
+  done
+}
+
+tui_home_paint_nav() {
+  local prev=$1
+
+  (( prev == TUI_MENU_SEL )) && return 0
+  (( ${#TUI_HOME_LIST_NORM[@]} == 0 )) && tui_home_menu_cache_build
+
+  tui_out_reset
+  if (( prev >= 0 && prev < ${#TUI_HOME_LIST_NORM[@]} )); then
+    tui_out_append "${TUI_HOME_LIST_NORM[$prev]}"
+  fi
+  if (( TUI_MENU_SEL >= 0 && TUI_MENU_SEL < ${#TUI_HOME_LIST_SEL[@]} )); then
+    tui_out_append "${TUI_HOME_LIST_SEL[$TUI_MENU_SEL]}"
+  fi
+  tui_begin_sync
+  tui_out_flush
+  tui_end_sync
 }
 
 tui_home_wait_input() {
@@ -519,10 +595,17 @@ tui_browse_layout_compute() {
 }
 
 tui_size_update() {
-  TUI_W=$(tput cols 2>/dev/null || echo 80)
-  TUI_H=$(tput lines 2>/dev/null || echo 24)
-  (( TUI_W < 72 )) && TUI_W=72
-  (( TUI_H < 20 )) && TUI_H=20
+  local w h
+
+  w=$(tput cols 2>/dev/null || echo 80)
+  h=$(tput lines 2>/dev/null || echo 24)
+  (( w < 72 )) && w=72
+  (( h < 20 )) && h=20
+  if [[ "$w" == "$TUI_W" && "$h" == "$TUI_H" ]]; then
+    return 0
+  fi
+  TUI_W=$w
+  TUI_H=$h
   TUI_INNER_W=$((TUI_W - 2))
   tui_browse_layout_compute
 }
@@ -579,29 +662,43 @@ tui_collect_pending_bytes() {
   printf '%s' "$buf"
 }
 
+tui_collect_pending_bytes_capped() {
+  local max=${1:-48}
+  local buf='' k=''
+  local n=0
+
+  while (( n < max )) && tui_read_byte k 0; do
+    buf+=$k
+    n=$((n + 1))
+  done
+  printf '%s' "$buf"
+}
+
 tui_parse_arrows_in_buf() {
   local buf=$1
   local apply_fn=$2
-  shift 2
-  local i=0 len=${#buf} c c2 c3 c4
+  local max_steps=$3
+  shift 3
+  local i=0 len=${#buf} c c2 c3 c4 steps=0
 
-  while (( i < len )); do
+  while (( i < len && steps < max_steps )); do
     c=${buf:i:1}
     if [[ "$c" == $'\e' ]] && (( i + 2 < len )); then
       c2=${buf:i+1:1}
       c3=${buf:i+2:1}
       if [[ "$c2" == '[' ]]; then
         case "$c3" in
-          A) "$apply_fn" up "$@"; i=$((i + 3)); continue ;;
-          B) "$apply_fn" down "$@"; i=$((i + 3)); continue ;;
-          C) "$apply_fn" right "$@"; i=$((i + 3)); continue ;;
-          D) "$apply_fn" left "$@"; i=$((i + 3)); continue ;;
+          A) "$apply_fn" up "$@"; i=$((i + 3)); steps=$((steps + 1)); continue ;;
+          B) "$apply_fn" down "$@"; i=$((i + 3)); steps=$((steps + 1)); continue ;;
+          C) "$apply_fn" right "$@"; i=$((i + 3)); steps=$((steps + 1)); continue ;;
+          D) "$apply_fn" left "$@"; i=$((i + 3)); steps=$((steps + 1)); continue ;;
           5|6)
             if (( i + 3 < len )); then
               c4=${buf:i+3:1}
               if [[ "$c4" == '~' ]]; then
                 [[ "$c3" == 5 ]] && "$apply_fn" pageup "$@" || "$apply_fn" pagedown "$@"
                 i=$((i + 4))
+                steps=$((steps + 1))
                 continue
               fi
             fi
@@ -681,12 +778,16 @@ tui_drain_arrow_burst() {
   local apply_fn=$1
   shift
   local buf='' k=''
+  local i=0
 
-  buf=$(tui_collect_pending_bytes)
-  while tui_read_byte k 0.02; do
+  buf=$(tui_collect_pending_bytes_capped 48)
+  while (( i < 6 )); do
+    tui_read_byte k 0.004 || break
     buf+=$k
+    i=$((i + 1))
   done
-  tui_parse_arrows_in_buf "$buf" "$apply_fn" "$@"
+  tui_parse_arrows_in_buf "$buf" "$apply_fn" 24 "$@"
+  tui_input_purge
 }
 
 tui_read_key_once() {
@@ -1037,6 +1138,7 @@ tui_draw_home() {
   for i in "${!tui_menu_items[@]}"; do
     tui_draw_home_menu_row "$i" "$(( i == TUI_MENU_SEL ))"
   done
+  tui_home_menu_cache_build
 
   tui_draw_panel_divider $((TUI_H - 3))
   tui_draw_nav_footer
@@ -1324,7 +1426,7 @@ tui_draw_browse() {
   if (( total > 0 )) && tui_browse_idx_ok "$TUI_BROWSE_SEL" "$total"; then
     tui_out_reset
     tui_out_append "${TUI_BC_DETAIL_META[$TUI_BROWSE_SEL]}"
-    tui_out_append "$(tui_browse_preview_get "$TUI_BROWSE_SEL")"
+    tui_out_append "${TUI_BC_DETAIL_PREVIEW[$TUI_BROWSE_SEL]}"
     tui_out_flush
     TUI_BROWSE_DETAIL_SEL=$TUI_BROWSE_SEL
   fi
