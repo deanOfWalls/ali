@@ -192,4 +192,6 @@ python3 ali/test/tui_spam_test.py 5 200
 
 ## License
 
-Add your license here before publishing (e.g. MIT).
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+You may use, modify, and share this software for **personal and other noncommercial purposes**. Commercial use (selling, SaaS, ads, etc.) is not permitted without separate permission. See [polyformproject.org](https://polyformproject.org/licenses/noncommercial/1.0.0) for details.
